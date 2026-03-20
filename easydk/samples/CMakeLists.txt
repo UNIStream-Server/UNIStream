@@ -1,0 +1,2 @@
+add_subdirectory(easy_pipeline)
+add_subdirectory(simple_demo)

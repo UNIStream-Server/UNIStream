@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.5)
+
+add_subdirectory(uni_launcher)
+add_subdirectory(simple_run_pipeline)
+add_subdirectory(single_decode_pipeline)
+add_subdirectory(osd_test_pipeline)
+add_subdirectory(test_run_pipeline)

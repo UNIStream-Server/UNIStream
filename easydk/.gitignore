@@ -1,0 +1,12 @@
+build
+doxygen
+lib
+bin
+sphinx_env
+cache
+edk_config.h
+mps_config.h
+
+tags
+.vscode
+.vim

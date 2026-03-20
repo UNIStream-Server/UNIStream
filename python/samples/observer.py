@@ -1,0 +1,112 @@
+# ==============================================================================
+# Copyright (C) [2022] by Cambricon, Inc. All rights reserved
+# Copyright (C) [2025] by UNIStream Team. All rights reserved 
+#  This file has been modified by UNIStream development team based on the original work from Cambricon, Inc.
+#  The original work is licensed under the Apache License, Version 2.0
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+# ==============================================================================
+
+import threading
+import signal
+
+import unistream
+
+
+force_stop = False
+
+def sig_handler(signum, frame):
+    global force_stop
+    force_stop = True
+
+signal.signal(signal.SIGINT, sig_handler)
+
+g_source_lock = threading.Lock()
+
+# Define a message observer and register with the pipeline
+class CustomObserver(unistream.StreamMsgObserver):
+  def __init__(self, pipeline, source):
+    unistream.StreamMsgObserver.__init__(self)
+    self.pipeline = pipeline
+    self.source = source
+    self.stop = False
+    self.wakener = threading.Condition()
+    self.stream_set = set()
+
+  def update(self, msg):
+    global g_source_lock
+    g_source_lock.acquire()
+    self.wakener.acquire()
+    if self.stop:
+      return
+    if msg.type == unistream.StreamMsgType.EOS:
+      print("pipeline[{}] stream[{}] gets EOS".format(self.pipeline.get_name(), msg.stream_id))
+      if msg.stream_id in self.stream_set:
+        self.source.remove_source(msg.stream_id)
+        self.stream_set.remove(msg.stream_id)
+      if len(self.stream_set) == 0:
+        print("pipeline[{}] received all EOS".format(self.pipeline.get_name()))
+        self.stop = True
+    elif msg.type == unistream.StreamMsgType.STREAM_ERR:
+      print("pipeline[{}] stream[{}] gets stream error".format(self.pipeline.get_name(), msg.stream_id))
+      if msg.stream_id in self.stream_set:
+        self.source.remove_source(msg.stream_id, True)
+        self.stream_set.remove(msg.stream_id)
+      if len(self.stream_set) == 0:
+        print("pipeline[{}] received all EOS".format(self.pipeline.get_name()))
+        self.stop = True
+    elif msg.type == unistream.StreamMsgType.ERROR:
+      print("pipeline[{}] gets error".format(self.pipeline.get_name()))
+      self.source.remove_sources(True)
+      self.stream_set.clear()
+      self.stop = True
+    elif msg.type == unistream.StreamMsgType.FRAME_ERR:
+      print("pipeline[{}] stream[{}] gets frame error".format(self.pipeline.get_name(), msg.stream_id))
+    else:
+      print("pipeline[{}] unknown message type".format(self.pipeline.get_name()))
+    if self.stop:
+      self.wakener.notify()
+
+    self.wakener.release()
+    g_source_lock.release()
+
+
+  def wait_for_stop(self):
+    global force_stop
+    self.wakener.acquire()
+    if len(self.stream_set) == 0:
+      self.stop = True
+    self.wakener.release()
+    while True:
+      if self.wakener.acquire():
+        self.wakener.wait_for(lambda: (self.stop or force_stop), 0.1)
+        if self.stop or force_stop:
+          break
+    self.wakener.release()
+    self.pipeline.stop()
+    print("pipeline[{}] stopped".format(self.pipeline.get_name()))
+
+
+  def increase_stream(self, stream_id):
+    self.wakener.acquire()
+    if stream_id in self.stream_set:
+      print("increase_stream() The stream is ongoing [{}]".format(stream_id))
+    else:
+      self.stream_set.add(stream_id)
+      if self.stop:
+        self.stop = False
+    self.wakener.release()

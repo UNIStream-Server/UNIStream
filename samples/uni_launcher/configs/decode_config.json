@@ -1,0 +1,10 @@
+{
+  "source" : {
+    "class_name" : "unistream::DataSource",
+    "custom_params" : {
+      "bufpool_size" : 16,
+      "interval" : 1,
+      "device_id" : 0
+    }
+  }
+}

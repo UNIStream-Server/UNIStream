@@ -1,0 +1,168 @@
+###############################################################################
+# Copyright (C) [2021] by Cambricon, Inc. All rights reserved
+# Copyright (C) [2025] by UNIStream Team. All rights reserved 
+#  This file has been modified by UNIStream development team based on the original work from Cambricon, Inc.
+#  The original work is licensed under the Apache License, Version 2.0
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+###############################################################################
+
+import os
+import cv2
+import time
+import queue
+import sys
+from webserver.logger import *
+import webserver.perf as perf
+
+sys.path.append(os.path.split(os.path.realpath(__file__))[0] + "/../../../../python/lib")
+
+from unistream import *
+
+preview_video_size = (1920, 1080)
+render_fps = 30
+timeouts = 100
+data_path = "./webui/static/data/"
+json_path = "./webui/static/json/"
+upload_json_path = "./webui/static/json/user/"
+user_media = "user_media"
+
+result_queue = queue.Queue()
+
+class UNIStreamService:
+  def __init__(self):
+    self.running = False
+    self.pipeline = None
+    self.source_module_name = 'source'
+    self.source = None
+    self.stream_id = 'stream_0'
+
+  def receive_processed_frame(self, frame):
+    if self.is_running():
+      result_queue.put(frame)
+
+  def is_running(self):
+    return self.running
+
+  def Start(self, input_file, config_json):
+    self.pipeline = Pipeline("WebPipeline")
+
+    if not self.pipeline.build_pipeline_by_json_file(config_json):
+      logger.error("Build pipeline failed, the JSON configuration is {}".format(config_json))
+
+    self.pipeline.register_frame_done_callback(self.receive_processed_frame)
+
+    self.source = self.pipeline.get_source_module(self.source_module_name)
+
+    if not self.pipeline.start():
+      logger.error("Start pipeline failed.")
+      return False
+    else:
+      logger.info("Start pipeline done.")
+
+    # Start a thread to print pipeline performance
+    self.print_perf_loop = perf.PrintPerformanceLoop(self.pipeline, perf_level=0)
+    self.print_perf_loop.start()
+
+    param = FileSourceParam()
+    param.filename = input_file
+    param.framerate = render_fps
+    file_handler = create_source(self.source, self.stream_id, param)
+    if self.source.add_source(file_handler) != 0:
+      logger.error("Failed to add stream {}".format(input_file))
+      return False
+
+    self.running = True
+    return True
+
+  def Stop(self):
+    self.running = False
+    result_queue.queue.clear()
+    self.source.remove_source(self.stream_id, True)
+    self.pipeline.stop()
+    self.print_perf_loop.stop()
+    logger.info("Pipeline stop done.")
+
+unistream_service = UNIStreamService()
+
+def getPreviewFrame():
+  render_with_interval = False
+
+  background_img = cv2.imread(data_path + "black.jpg")
+  ret, encode_img = cv2.imencode('.jpg', background_img)
+  background_img_bytes = encode_img.tobytes()
+
+  while True:
+    if unistream_service.is_running():
+      start = time.time()
+      while True:
+        if (result_queue.empty()):
+          time.sleep(0.1)
+        else:
+          break
+      frame_info = result_queue.get()
+
+      if (True == frame_info.is_eos()):
+        logger.info("read EOS frame.")
+        frame_info = None
+        unistream_service.Stop()
+      else:
+        uni_data = frame_info.get_cn_data_frame()
+        if not uni_data.has_bgr_image():
+          continue
+        frame_data = uni_data.image_bgr()
+        ret, jpg_data = cv2.imencode(".jpg", cv2.resize(frame_data, preview_video_size))
+        if ret:
+          frame_bytes = jpg_data.tobytes()
+          yield (b'--frame\r\n'
+                 b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+      done = time.time()
+      elapsed = done - start
+      if render_with_interval:
+        if 1/render_fps - elapsed > 0:
+          time.sleep(1/render_fps - elapsed)
+      render_with_interval = True
+    else:
+      yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + background_img_bytes + b'Content-Type: image/jpeg\r\n\r\n')
+      time.sleep(1)
+  yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + background_img_bytes + b'Content-Type: image/jpeg\r\n\r\n')
+
+
+def getSourceUrl(filename):
+  global render_fps
+  if filename:
+    render_fps = 30
+    if filename == "cars":
+      filename = "cars.mp4"
+    elif filename == "people":
+      filename = "1080P.h264"
+    elif filename == "images":
+      filename = "%d.jpg"
+      render_fps = 1
+    elif filename == "objects":
+      filename = "objects.mp4"
+    else :
+      filename = user_media + "/" + filename
+    filename = data_path + filename
+  return filename
+
+
+def getDemoConsoleOutput():
+  while not log_queue.empty():
+    yield log_queue.get().getMessage()+"\n"

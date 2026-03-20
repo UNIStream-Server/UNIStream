@@ -1,0 +1,215 @@
+cmake_minimum_required(VERSION 3.5)
+if(POLICY CMP0046)
+  cmake_policy(SET CMP0046 NEW)
+endif()
+if(POLICY CMP0054)
+  cmake_policy(SET CMP0054 NEW)
+endif()
+
+set(UNISTREAM_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+set(VERSION_HEAD_FILE ${UNISTREAM_ROOT_DIR}/framework/include/unistream_version.hpp)
+execute_process(COMMAND awk /UNISTREAM_MAJOR_VERSION/ ${VERSION_HEAD_FILE} OUTPUT_VARIABLE VERSION_STR)
+string(REGEX MATCH "[0-9]+"  MAJOR_VERSION ${VERSION_STR})
+execute_process(COMMAND awk /UNISTREAM_MINOR_VERSION/ ${VERSION_HEAD_FILE} OUTPUT_VARIABLE VERSION_STR)
+string(REGEX MATCH "[0-9]+"  MINOR_VERSION ${VERSION_STR})
+execute_process(COMMAND awk /UNISTREAM_PATCH_VERSION/ ${VERSION_HEAD_FILE} OUTPUT_VARIABLE VERSION_STR)
+string(REGEX MATCH "[0-9]+"  PATCH_VERSION ${VERSION_STR})
+set(UNISTREAM_TARGET_VERSION "${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}")
+
+# ---[ Options
+option(BUILD_VENCODE         "build module vencode" ON)
+option(BUILD_INFERENCE       "build module inference" ON)
+option(BUILD_OSD             "build module osd" ON)
+option(BUILD_SOURCE          "build module source" ON)
+option(BUILD_TRACK           "build module track" ON)
+option(BUILD_VOUT            "build module vout" ON)
+option(BUILD_KAFKA           "build module kafka" ON)
+option(WITH_FFMPEG           "with ffmpeg" ON)
+option(WITH_FFMPEG_AVDEVICE  "with ffmpeg avdevice" OFF)
+option(WITH_FREETYPE         "with freetype" OFF)
+
+if(BUILD_TESTS)
+  add_definitions(-DUNIT_TEST)
+endif()
+
+# ---[ 3rdparty
+set(3RDPARTY_LIBS "")
+set(DEPENDENCIES "")
+
+set(CMAKE_MODULE_PATH ${UNISTREAM_ROOT_DIR}/cmake)
+
+include(${UNISTREAM_ROOT_DIR}/cmake/have_unistream_target.cmake)
+
+# ---[ framework
+have_framework_target(${UNISTREAM_ROOT_DIR})
+list(APPEND 3RDPARTY_LIBS unistream_core)
+if(HAVE_FRAMEWORK_TARGET)
+  list(APPEND DEPENDENCIES unistream_core)
+endif()
+
+# ---[ easydk
+have_easydk_target(${UNISTREAM_ROOT_DIR})
+list(APPEND 3RDPARTY_LIBS easydk)
+if(HAVE_EASYDK_TARGET)
+  list(APPEND DEPENDENCIES easydk)
+endif()
+
+# ---[ rapidjson
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/rapidjson/include)
+
+# ---[ libyuv
+list(APPEND ADDITIONAL_MAKE_CLEAN_FILES_LIST "${UNISTREAM_ROOT_DIR}/3rdparty/libyuv")
+add_custom_target(unistream_libyuv sh ${UNISTREAM_ROOT_DIR}/tools/build_libyuv.sh ${CMAKE_C_COMPILER} ${CMAKE_CXX_COMPILER})
+list(APPEND DEPENDENCIES unistream_libyuv)
+include_directories(${UNISTREAM_ROOT_DIR}/3rdparty/libyuv/include)
+link_directories(${UNISTREAM_ROOT_DIR}/3rdparty/libyuv/lib)
+list(APPEND 3RDPARTY_LIBS ${UNISTREAM_ROOT_DIR}/3rdparty/libyuv/lib/libyuv.a)
+
+# ---[ opencv
+set(OpenCV_FIND_QUIETLY true)
+#find_package(OpenCV REQUIRED) //this will include opencv_ts which result in crash on centos
+find_package(OpenCV OPTIONAL_COMPONENTS videoio)
+set(optional_opencv_libs ${OpenCV_LIBS})
+find_package(OpenCV REQUIRED core imgproc highgui features2d)
+if(OpenCV_FOUND)
+  if(imgcodecs_FOUND)
+    list(APPEND OpenCV_LIBS optional_opencv_libs)
+  endif()
+  include_directories(${OpenCV_INCLUDE_DIRS})
+  list(APPEND 3RDPARTY_LIBS ${OpenCV_LIBS})
+  message(STATUS "opencv include: ${OpenCV_INCLUDE_DIRS}")
+  message(STATUS "opencv libraries: ${OpenCV_LIBS}")
+else()
+  message(FATAL_ERROR "opencv not found!")
+endif()
+
+# ---[ ffmpeg
+if(WITH_FFMPEG AND (BUILD_SOURCE OR BUILD_VENCODE))
+  find_package(FFmpeg REQUIRED)
+  if (FFMPEG_FOUND)
+    include_directories(${FFMPEG_INCLUDE_DIR})
+    list(APPEND 3RDPARTY_LIBS ${FFMPEG_LIBRARIES})
+    set(HAVE_FFMPEG true)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_FFMPEG")
+    if (WITH_FFMPEG_AVDEVICE)
+       add_definitions(-DHAVE_FFMPEG_AVDEVICE)
+    endif ()
+    message(STATUS "ffmpeg include: ${FFMPEG_INCLUDE_DIR}")
+    message(STATUS "ffmpeg libraries: ${FFMPEG_LIBRARIES}")
+  else ()
+    message(FATAL_ERROR "ffmpeg not found!")
+  endif ()
+endif()
+
+# ---[ freetype
+if(WITH_FREETYPE AND BUILD_OSD)
+  if (PLATFORM MATCHES "CE3226")
+    include_directories(${CMAKE_FIND_ROOT_PATH}/include/freetype2)
+  endif()
+  find_package(Freetype REQUIRED)
+  if (FREETYPE_FOUND)
+    include_directories(${FREETYPE_INCLUDE_DIR_ft2build})
+    list(APPEND 3RDPARTY_LIBS ${FREETYPE_LIBRARIES})
+    message(STATUS "freetype include: ${FREETYPE_INCLUDE_DIR_ft2build}")
+    message(STATUS "freetype libraries: ${FREETYPE_LIBRARIES}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_FREETYPE")
+  else (FREETYPE_FOUND)
+    message(FATAL_ERROR "freetype not found!")
+  endif (FREETYPE_FOUND)
+endif()
+
+# ---[ live555
+if(BUILD_SOURCE OR BUILD_VENCODE)
+  list(APPEND ADDITIONAL_MAKE_CLEAN_FILES_LIST "${UNISTREAM_ROOT_DIR}/3rdparty/live555")
+  add_custom_target(live555 sh ${UNISTREAM_ROOT_DIR}/tools/build_live555.sh ${CMAKE_C_COMPILER} ${CMAKE_CXX_COMPILER})
+  list(APPEND DEPENDENCIES live555)
+
+  include_directories(${UNISTREAM_ROOT_DIR}/3rdparty/live555/include/BasicUsageEnvironment)
+  include_directories(${UNISTREAM_ROOT_DIR}/3rdparty/live555/include/groupsock)
+  include_directories(${UNISTREAM_ROOT_DIR}/3rdparty/live555/include/liveMedia)
+  include_directories(${UNISTREAM_ROOT_DIR}/3rdparty/live555/include/UsageEnvironment)
+  set(Live555_LIBS ${UNISTREAM_ROOT_DIR}/3rdparty/live555/lib/libliveMedia.so
+	           ${UNISTREAM_ROOT_DIR}/3rdparty/live555/lib/libUsageEnvironment.so
+		   ${UNISTREAM_ROOT_DIR}/3rdparty/live555/lib/libBasicUsageEnvironment.so
+		   ${UNISTREAM_ROOT_DIR}/3rdparty/live555/lib/libgroupsock.so)
+  list(APPEND 3RDPARTY_LIBS ${Live555_LIBS})
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIVE555 -DNO_OPENSSL")
+endif()
+
+# ---[ kafka
+if(BUILD_KAFKA)
+  find_package(LibRDKafka)
+  if(LIBRDKAFKA_FOUND)
+    include_directories(${LibRDKafka_INCLUDE_DIR})
+    list(APPEND 3RDPARTY_LIBS ${LibRDKafka_C_LIBRARIES})
+    message(STATUS "LibRDKafka include: ${LibRDKafka_INCLUDE_DIR}")
+    message(STATUS "LibRDKafka libraries: ${LibRDKafka_C_LIBRARIES}")
+  else()
+    message(FATAL_ERROR "rdkafka not found!")
+  endif()
+endif()
+
+set(module_list "")
+if(BUILD_VENCODE)
+  list(APPEND module_list encode)
+  include_directories(${PROJECT_SOURCE_DIR}/modules/encode/src)
+  include_directories(${PROJECT_SOURCE_DIR}/modules/encode/src/rtsp/src)
+  install(DIRECTORY encode/include/ DESTINATION include)
+endif()
+if(BUILD_INFERENCE)
+  list(APPEND module_list inference)
+  install(DIRECTORY inference/include/ DESTINATION include)
+endif()
+if(BUILD_OSD)
+  list(APPEND module_list osd)
+  install(DIRECTORY osd/include/ DESTINATION include)
+endif()
+if(BUILD_SOURCE)
+  list(APPEND module_list source)
+  install(DIRECTORY source/include/ DESTINATION include)
+endif()
+if(BUILD_TRACK)
+  list(APPEND module_list track)
+  install(DIRECTORY track/include/ DESTINATION include)
+endif()
+if(BUILD_VOUT)
+  list(APPEND module_list vout)
+  install(DIRECTORY vout/include/ DESTINATION include)
+endif()
+if(BUILD_KAFKA)
+  list(APPEND module_list kafka)
+  install(DIRECTORY kafka/include/ DESTINATION include)
+endif()
+
+list(APPEND module_list util)
+install(DIRECTORY util/include/ DESTINATION include)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/util/include)
+file(GLOB srcs ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+
+
+foreach(module ${module_list})
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/${module}/include)
+  file(GLOB_RECURSE module_src ${CMAKE_CURRENT_SOURCE_DIR}/${module}/*.cpp)
+  list(APPEND srcs ${module_src})
+endforeach()
+
+set(LIBRARY_OUTPUT_PATH ${UNISTREAM_ROOT_DIR}/lib)
+message(STATUS "@@@@@@@@@@@ Target : unistream_va")
+add_library(unistream_va SHARED ${srcs})
+add_dependencies(unistream_va ${DEPENDENCIES})
+set_target_properties(unistream_va PROPERTIES LINK_FLAGS_RELEASE -s)
+
+install(TARGETS unistream_va LIBRARY DESTINATION lib)
+target_link_libraries(unistream_va PRIVATE ${3RDPARTY_LIBS} ${OpenCV_LIBS} rt dl pthread)
+set_target_properties(unistream_va PROPERTIES VERSION ${UNISTREAM_TARGET_VERSION})
+
+# remove related files while make clean
+set_property(DIRECTORY PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${ADDITIONAL_MAKE_CLEAN_FILES_LIST})
+
+if(BUILD_TESTS)
+  set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin/)
+  add_subdirectory(unitest)
+endif()

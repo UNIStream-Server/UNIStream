@@ -1,0 +1,76 @@
+name: Precheckin
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build_and_test:
+    runs-on: easydk-video
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Lintgit Check
+        run: ./tools/lintgit origin/master
+
+      - uses: actions/checkout@v2
+      - name: Run Test
+        run: |
+          export NEUWARE_HOME=/usr/local/neuware
+          export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:/usr/local/neuware/lib64
+          export GLOG_minloglevel=0
+          # export GLOG_v=5
+          mkdir build
+          pushd build
+            cmake -DPLATFORM=MLU370 -DBUILD_TESTS=ON -DBUILD_SAMPLES=ON -DCODE_COVERAGE_TEST=ON -DBUILD_PYTHON_API=ON ..
+            make -j8
+            ./bin/tests_edk
+            if [ $? -ne 0 ];then
+              exit 1
+            fi
+            pip3 --default-timeout=1000 install -U pytest -i https://pypi.tuna.tsinghua.edu.cn/simple
+            pip3 --default-timeout=1000 install -r ../python/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+            ./../python/test/run_pytest.sh
+            if [ $? -ne 0 ];then
+              exit 1
+            fi
+          popd
+          pushd samples/simple_demo/classification
+            ./run_resnet50.sh mlu370
+            if [ $? -ne 0 ];then
+              exit 1
+            fi
+          popd
+          pushd samples/simple_demo/detection
+            ./run_yolov3.sh mlu370
+            if [ $? -ne 0 ];then
+              exit 1
+            fi
+          popd
+          pushd samples/easy_pipeline
+            ./run_resnet50.sh mlu370
+            if [ $? -ne 0 ];then
+              exit 1
+            fi
+            ./run_yolov3.sh mlu370
+            if [ $? -ne 0 ];then
+              exit 1
+            fi
+          popd
+          pushd python/samples/
+            pip3 --default-timeout=1000 install -r ../requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+            python cnis_async_demo.py
+            if [ $? -ne 0 ]; then
+                exit 1
+            fi
+            python cnis_sync_demo.py
+            if [ $? -ne 0 ]; then
+                exit 1
+            fi
+            python cnis_infer_only_demo.py
+            if [ $? -ne 0 ]; then
+                exit 1
+            fi
+          popd

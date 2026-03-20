@@ -1,0 +1,15 @@
+{
+  "profiler_config" : {
+    "enable_profiling" : true,
+    "enable_tracing" : true
+  },
+
+  "source" : {
+    "class_name" : "unistream::DataSource",
+    "custom_params" : {
+      "bufpool_size" : 16,
+      "interval" : 1,
+      "device_id" : 0
+    }
+  }
+}

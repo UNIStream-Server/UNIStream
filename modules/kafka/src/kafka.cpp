@@ -1,0 +1,128 @@
+/*************************************************************************
+ * Copyright (C) [2020] by Cambricon, Inc. All rights reserved
+ * Copyright (C) [2025] by UNIStream Team. All rights reserved 
+ *  This file has been modified by UNIStream development team based on the original work from Cambricon, Inc.
+ *  The original work is licensed under the Apache License, Version 2.0
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *************************************************************************/
+
+#include "kafka.hpp"
+
+#include <chrono>
+#include <iomanip>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "unistream_logging.hpp"
+
+
+#include "kafka_client.h"
+#include "kafka_handler.hpp"
+
+namespace unistream {
+
+struct KafkaContext {
+  std::unique_ptr<KafkaHandler> handler = nullptr;
+};
+
+Kafka::Kafka(const std::string &name) : Module(name) {
+  param_register_.SetModuleDesc(
+      "kafka is a module which using rdkafka to produce UNIFrameInfo data, or consume data.");
+  param_register_.Register("handler", "The name of handler which use to deal UNIFrameInfo data.");
+  param_register_.Register("brokers", "The Brokers list of Kafka. "
+      "It is a ,-separated list of brokers in the format: <host1>[:<port1>],<host2>[:<port2>]....");
+  param_register_.Register("topic", "Topic is the basic unit of Kafka data writing operation.");
+}
+
+KafkaContext *Kafka::GetContext(UNIFrameInfoPtr data) {
+  KafkaContext *ctx = nullptr;
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto search = contexts_.find(data->GetStreamIndex());
+  if (search != contexts_.end()) {
+    ctx = search->second;
+  } else {
+    ctx = new KafkaContext;
+    std::string topic = topic_ + "_" + std::to_string(data->GetStreamIndex());
+    ctx->handler.reset(KafkaHandler::Create(handler_name_));
+    if (!ctx->handler) {
+      LOGE(Kafka) << "Create handler failed";
+      delete ctx;
+      return nullptr;
+    }
+    ctx->handler->brokers_ = brokers_;
+    ctx->handler->topic_ = topic;
+    contexts_[data->GetStreamIndex()] = ctx;
+  }
+
+  return ctx;
+}
+
+Kafka::~Kafka() { Close(); }
+
+bool Kafka::Open(unistream::ModuleParamSet param_set) {
+  if (param_set.find("brokers") == param_set.end() || param_set.find("handler") == param_set.end()) {
+    LOGE(Kafka) << "Miss parameters";
+    return false;
+  }
+
+  brokers_ = param_set["brokers"];
+  handler_name_ = param_set["handler"];
+
+  if (param_set.find("topic") != param_set.end()) {
+    topic_ = param_set["topic"];
+  } else {
+    topic_ = "UnistreamData";
+  }
+  return true;
+}
+
+void Kafka::Close() {
+  if (contexts_.empty()) {
+    return;
+  }
+  for (auto &c : contexts_) {
+    delete c.second;
+  }
+  contexts_.clear();
+}
+
+int Kafka::Process(UNIFrameInfoPtr data) {
+  if (!data) return -1;
+
+  if (data->IsRemoved()) { /* discard packets from removed-stream */
+    return 0;
+  }
+
+  KafkaContext *ctx = GetContext(data);
+  if (!ctx) {
+    LOGE(Kafka) << "Get Kafka Context Failed.";
+    return -1;
+  }
+
+  if (ctx->handler) {
+    if (ctx->handler->UpdateFrame(data)) {
+      LOGE(Kafka) << "Update frame failed";
+    }
+  }
+
+  return 0;
+}
+
+}  // namespace unistream

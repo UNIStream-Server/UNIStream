@@ -1,0 +1,11 @@
+{
+  "venc" : {
+    "class_name" : "unistream::VEncode",
+    "parallelism" : 1,
+    "max_input_queue_size" : 10,
+    "custom_params" : {
+      "file_name" : "output/output.mp4",
+      "device_id": 0
+    }
+  }
+}

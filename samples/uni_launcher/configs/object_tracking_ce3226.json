@@ -1,0 +1,13 @@
+{
+  "tracker" : {
+    "class_name" : "unistream::Tracker",
+    "parallelism" : 1,
+    "max_input_queue_size" : 20,
+    "custom_params" : {
+      "model_path" : "../../../data/models/feature_extract_v0.13.0_4b_rgb_uint8.magicmind",
+      "max_cosine_distance": "0.06",
+      "engine_num" : 2,
+      "device_id" : 0
+    }
+  }
+}
